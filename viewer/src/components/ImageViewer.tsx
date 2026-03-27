@@ -1,6 +1,7 @@
 import { useRef, useEffect, useCallback, useState, useImperativeHandle, forwardRef } from "react";
-import type { Transform, Polygon, Point } from "../types";
+import type { Transform, Polygon, Point, BBox } from "../types";
 import { SvgOverlay } from "./SvgOverlay";
+import { getPolygonBBox, cropImage, createMask, createCropWithOverlay } from "../utils/imageUtils";
 
 interface Props {
   src: string;
@@ -15,6 +16,7 @@ interface Props {
 export interface ImageViewerHandle {
   zoomBy: (factor: number) => void;
   fitToView: () => void;
+  extractRegion: (polygon: Polygon) => { crop: string; cropWithOverlay: string; mask: string; bbox: BBox } | null;
 }
 
 export const ImageViewer = forwardRef<ImageViewerHandle, Props>(function ImageViewer({
@@ -196,7 +198,19 @@ export const ImageViewer = forwardRef<ImageViewerHandle, Props>(function ImageVi
     [scheduleDraw, commitTransform]
   );
 
-  useImperativeHandle(ref, () => ({ zoomBy, fitToView: fitImage }), [zoomBy, fitImage]);
+  useImperativeHandle(ref, () => ({
+    zoomBy,
+    fitToView: fitImage,
+    extractRegion: (polygon: Polygon) => {
+      const img = imgRef.current;
+      if (!img || !img.complete) return null;
+      const bbox = getPolygonBBox(polygon.points, img.naturalWidth, img.naturalHeight);
+      const crop = cropImage(img, bbox);
+      const cropWithOverlay = createCropWithOverlay(img, polygon, bbox);
+      const mask = createMask(polygon, bbox);
+      return { crop, cropWithOverlay, mask, bbox };
+    },
+  }), [zoomBy, fitImage]);
 
   // ---- convert screen point to image coords ----
   const screenToImage = useCallback((sx: number, sy: number): Point => {

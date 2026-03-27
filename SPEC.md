@@ -15,6 +15,7 @@
 | Rendering      | HTML Canvas (obraz) + SVG (adnotacje) |
 | Styling        | Vanilla CSS (ciemny motyw)   |
 | Serwer obrazów | Five Server (127.0.0.1:5500) |
+| AI Backend     | ComfyUI (127.0.0.1:8188) — inpainting |
 
 ---
 
@@ -27,11 +28,16 @@ viewer/src/
 ├── App.css                     # style globalne aplikacji
 ├── index.css                   # reset CSS
 ├── types.ts                    # współdzielone typy TS
-└── components/
-    ├── ImageViewer.tsx          # canvas z zoom/pan + montuje SvgOverlay
-    ├── SvgOverlay.tsx           # warstwa SVG do rysowania poligonów
-    ├── Toolbar.tsx              # pasek narzędzi (markup, kolor, grubość, undo/clear)
-    └── Thumbnails.tsx           # miniaturki do przełączania obrazów
+├── components/
+│   ├── ImageViewer.tsx          # canvas z zoom/pan + montuje SvgOverlay
+│   ├── SvgOverlay.tsx           # warstwa SVG do rysowania poligonów
+│   ├── Toolbar.tsx              # pasek narzędzi (markup, kolor, grubość, undo/clear, zoom, gen.fill)
+│   ├── Thumbnails.tsx           # miniaturki do przełączania obrazów
+│   └── GenerativeFillPanel.tsx  # panel boczny do generative fill (prompt, podgląd, model)
+├── services/
+│   └── comfyui.ts               # integracja z API ComfyUI (upload, workflow, polling)
+└── utils/
+    └── imageUtils.ts            # narzędzia obrazowe (crop, mask, composite)
 ```
 
 ---
@@ -55,6 +61,22 @@ interface Transform {
   y: number;    // przesunięcie Y (px ekranowe)
   scale: number; // współczynnik skalowania
 }
+
+interface BBox {
+  x: number;    // lewy górny róg X (px obrazka)
+  y: number;    // lewy górny róg Y (px obrazka)
+  w: number;    // szerokość (px)
+  h: number;    // wysokość (px)
+}
+
+interface FillSession {
+  crop: string;       // data URL cropa regionu (z overlayem poligonu)
+  mask: string;       // data URL czarno-białej maski (biały = zaznaczenie)
+  bbox: BBox;         // bounding box zaznaczonego regionu
+  polygon: Polygon;   // poligon użyty do zaznaczenia
+  result?: string;    // data URL wyniku generacji (opcjonalny, po zakończeniu)
+  isGenerating: boolean; // czy trwa generacja
+}
 ```
 
 ---
@@ -66,12 +88,15 @@ interface Transform {
 **Odpowiedzialność:** Zarządza globalnym stanem aplikacji.
 
 **Stan:**
+- `imageUrls: string[]` — mutablena lista URL-i obrazków (aktualizowana po zatwierdzeniu generative fill)
 - `currentIndex: number` — indeks aktualnie wybranego obrazka
 - `markupMode: boolean` — czy tryb markup jest aktywny
 - `polygons: Record<number, Polygon[]>` — mapa poligonów per obrazek (klucz = indeks)
 - `strokeColor: string` — aktualny kolor rysowania (domyślnie `#ff3366`)
 - `strokeWidth: number` — aktualna grubość linii (domyślnie `3`)
 - `zoomPercent: number` — aktualny poziom zoomu w procentach (domyślnie `100`)
+- `fillSession: FillSession | null` — aktywna sesja generative fill (null = nieaktywna)
+- `fillError: string | null` — komunikat błędu generative fill
 
 **Referencje:**
 - `viewerRef: React.RefObject<ImageViewerHandle>` — ref do `ImageViewer`, używany do programowego zoom (`zoomBy`) i fit-to-view (`fitToView`)
@@ -109,10 +134,11 @@ const IMAGE_URLS = [
 | `onScaleChange`  | `(scale: number) => void`  | Callback wywoływany przy zmianie skali (opcjonalny) |
 
 **Imperative Handle (`ImageViewerHandle`):**
-| Metoda       | Sygnatura                 | Opis                                              |
-| ------------ | ------------------------- | ------------------------------------------------- |
-| `zoomBy`     | `(factor: number) => void`| Programowy zoom do centrum widoku (×factor)        |
-| `fitToView`  | `() => void`              | Dopasowanie obrazka do kontenera                   |
+| Metoda          | Sygnatura                                            | Opis                                                         |
+| --------------- | ---------------------------------------------------- | ------------------------------------------------------------ |
+| `zoomBy`        | `(factor: number) => void`                           | Programowy zoom do centrum widoku (×factor)                  |
+| `fitToView`     | `() => void`                                         | Dopasowanie obrazka do kontenera                             |
+| `extractRegion` | `(polygon: Polygon) => { crop, cropWithOverlay, mask, bbox }` | Wycina region z canvas na podstawie bounding box poligonu |
 
 Komponent jest `forwardRef` — `App` trzyma `viewerRef` i wywołuje metody handle z przycisków toolbara.
 
@@ -203,6 +229,7 @@ screenToImage(sx, sy) → { x: (sx - transform.x) / transform.scale,
 | Range slider         | `markupMode=true`    | Grubość linii 1–20px                            |
 | Przycisk Cofnij      | `markupMode=true`    | Undo ostatniego poligonu, disabled gdy brak     |
 | Przycisk Wyczyść     | `markupMode=true`    | Kasuje wszystkie poligony bieżącego obrazka     |
+| ✨ Generative Fill   | `markupMode=true` && dokładnie 1 poligon && brak aktywnej sesji fill | Otwiera panel generative fill |
 
 ---
 
@@ -216,6 +243,93 @@ screenToImage(sx, sy) → { x: (sx - transform.x) / transform.scale,
 - Nieaktywne: `opacity: 0.6`, hover: `opacity: 0.85`
 - Kliknięcie zmienia `currentIndex` w `App`
 - Pasek przewijalny (`overflow-x: auto`)
+
+---
+
+### 5.6 `GenerativeFillPanel`
+
+**Odpowiedzialność:** Panel boczny (prawy-górny róg viewer area) do zarządzania generative fill.
+
+**Props:**
+| Prop           | Typ                                          | Opis                                       |
+| -------------- | -------------------------------------------- | ------------------------------------------ |
+| `session`      | `FillSession`                                | Aktywna sesja fill (crop, mask, wynik)     |
+| `onGenerate`   | `(prompt: string, checkpoint: string) => void` | Callback generacji z promptem i modelem  |
+| `onAccept`     | `() => void`                                 | Zatwierdzenie wyniku                       |
+| `onRegenerate` | `(prompt: string, checkpoint: string) => void` | Ponowna generacja z nowym promptem       |
+| `onCancel`     | `() => void`                                 | Anulowanie sesji fill                      |
+
+**Stan wewnętrzny:**
+- `prompt: string` — tekst promptu
+- `checkpoints: string[]` — lista dostępnych modeli (pobierana z ComfyUI API na mount)
+- `selectedCheckpoint: string` — wybrany model
+- `loadingModels: boolean` — stan ładowania listy modeli
+
+**Elementy UI:**
+1. **Header** — tytuł "Generative Fill" + przycisk zamknięcia
+2. **Preview** — podgląd cropa (przed generacją) lub wyniku (po generacji)
+3. **Model selector** — dropdown z dostępnymi checkpointami ComfyUI (auto-wykrywane)
+4. **Prompt textarea** — opis pożądanego rezultatu, Enter wysyła
+5. **Spinner** — animowany kółko podczas generacji
+6. **Action buttons:**
+   - 🚀 Generuj (przed wynikiem)
+   - ✓ Zatwierdź / ↻ Przegeneruj / ✕ Anuluj (po wyniku)
+
+---
+
+### 5.7 Serwis `comfyui.ts`
+
+**Odpowiedzialność:** Integracja z API ComfyUI na `http://127.0.0.1:8188`.
+
+**Eksportowane funkcje:**
+
+| Funkcja          | Sygnatura                                                                        | Opis                                                    |
+| ---------------- | -------------------------------------------------------------------------------- | ------------------------------------------------------- |
+| `getCheckpoints` | `() => Promise<string[]>`                                                        | Pobiera listę dostępnych checkpoint modeli z ComfyUI    |
+| `generateFill`   | `(crop: string, mask: string, prompt: string, checkpoint?: string) => Promise<string>` | Pełny flow inpaintingu: upload → workflow → queue → poll → zwraca data URL |
+
+**Workflow ComfyUI (inpainting):**
+```
+CheckpointLoaderSimple (wybrany model)
+  ├── MODEL → KSampler
+  ├── CLIP → CLIPTextEncode (positive prompt)
+  └── CLIP → CLIPTextEncode (negative: "blurry, bad quality, ...")
+  └── VAE → VAEEncodeForInpaint, VAEDecode
+
+LoadImage (crop) → VAEEncodeForInpaint
+LoadImage (mask) → ImageToMask (red channel) → VAEEncodeForInpaint
+
+KSampler:
+  - steps: 20
+  - cfg: 7
+  - sampler: euler_ancestral
+  - scheduler: normal
+  - denoise: 0.85
+
+VAEDecode → SaveImage → wynik
+```
+
+**API calls:**
+- `POST /upload/image` — upload cropa i maski jako PNG
+- `POST /prompt` — kolejkowanie workflow
+- `GET /history/{prompt_id}` — polling wyniku (co 1s, timeout 120s)
+- `GET /view?filename=...&subfolder=...&type=output` — pobranie wygenerowanego obrazu
+- `GET /object_info/CheckpointLoaderSimple` — lista dostępnych checkpointów
+
+---
+
+### 5.8 Utilities `imageUtils.ts`
+
+**Eksportowane funkcje:**
+
+| Funkcja               | Opis                                                                              |
+| --------------------- | --------------------------------------------------------------------------------- |
+| `getPolygonBBox(p)`   | Oblicza bounding box poligonu z marginiesem 32px                                  |
+| `cropImage(src, bbox)`| Wycina prostokątny region z obrazu                                                |
+| `createMask(polygon, bbox)` | Tworzy czarno-białą maskę (czarne tło, biały wypełniony poligon)           |
+| `createCropWithOverlay(src, polygon, bbox)` | Crop z nałożonym obrysem poligonu (do podglądu)          |
+| `compositeImages(base, result, bbox)` | Nakłada wynik generacji z powrotem na oryginał w pozycji bbox      |
+| `loadImage(src)`      | Promise wrapper do ładowania Image z data URL lub URL                             |
 
 ---
 
@@ -241,6 +355,31 @@ LPM down        →  Rozpoczęcie rysowania poligonu
 LPM move        →  Dodawanie punktów do poligonu (real-time podgląd)
 LPM up          →  Zakończenie i zapis poligonu (jeśli >2 punkty)
 ```
+
+### 6.3 Generative Fill
+
+**Warunki aktywacji:** `markupMode=true`, dokładnie 1 narysowany poligon, brak aktywnej sesji fill.
+
+**Flow:**
+1. Użytkownik rysuje poligon w trybie markup
+2. Pojawia się przycisk "✨ Generative Fill" w toolbarze
+3. Kliknięcie otwiera panel boczny z:
+   - Podglądem wyciętego regionu (crop z overlayem poligonu)
+   - Selectorem modelu (auto-wykrywany z ComfyUI)
+   - Polem promptu
+4. Użytkownik wpisuje prompt i klika "Generuj" (lub Enter)
+5. System:
+   - Wycina czysty crop i maskę z canvas (via `extractRegion`)
+   - Uploaduje crop i maskę do ComfyUI
+   - Kolejkuje workflow inpainting
+   - Polluje wynik (co 1s, max 120s)
+6. Wynik pojawia się w podglądzie panelu
+7. Użytkownik może:
+   - **Zatwierdź** → wynik jest composited na oryginalny obraz (podmiana URL w state)
+   - **Przegeneruj** → ponowna generacja z aktualnym promptem/modelem
+   - **Anuluj** → powrót bez zmian
+
+**Zatwierdzenie:** `compositeImages()` nakłada wynik na oryginał, aktualizuje `imageUrls[currentIndex]` jako data URL, czyści poligony, wyłącza markup mode.
 
 ---
 
@@ -269,6 +408,9 @@ Ciemny motyw — paleta kolorów:
 - Poligony to zamknięte `<polygon>` SVG bez wypełnienia (`fill="none"`)
 - Brak eksportu/importu adnotacji
 - Brak skalowania grubości linii proporcjonalnie do rozmiaru obrazu — grubość jest wizualnie stała
+- Generative fill wymaga działającego ComfyUI na `localhost:8188`
+- ComfyUI musi mieć zainstalowany co najmniej jeden checkpoint model (np. Realistic Vision V5.1 Inpainting)
+- Po zatwierdzeniu generative fill, oryginał jest nadpisywany w pamięci (data URL) — brak powrotu do oryginału
 
 ---
 
@@ -280,4 +422,7 @@ npm install
 npm run dev        # → http://localhost:5173
 ```
 
-Wymaga działającego serwera plików na `http://127.0.0.1:5500/assets/` z plikami `1.jpeg`–`4.jpeg`.
+**Wymagania:**
+- Serwer plików na `http://127.0.0.1:5500/assets/` z plikami `1.jpeg`–`4.jpeg`
+- ComfyUI na `http://127.0.0.1:8188` (wymagany do generative fill)
+  - Co najmniej jeden checkpoint w `models/checkpoints/`

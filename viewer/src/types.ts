@@ -14,3 +14,19 @@ export interface Transform {
   y: number;
   scale: number;
 }
+
+export interface BBox {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+export interface FillSession {
+  crop: string;          // data URL of cropped region
+  mask: string;          // data URL of mask
+  bbox: BBox;            // bounding box in image coords
+  polygon: Polygon;      // the source polygon
+  result?: string;       // data URL of generated result
+  isGenerating: boolean;
+}

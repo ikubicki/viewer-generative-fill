@@ -12,6 +12,8 @@ interface Props {
   onZoomOut: () => void;
   onFitToView: () => void;
   zoomPercent: number;
+  showGenerativeFill: boolean;
+  onGenerativeFill: () => void;
 }
 
 export function Toolbar({
@@ -28,6 +30,8 @@ export function Toolbar({
   onZoomOut,
   onFitToView,
   zoomPercent,
+  showGenerativeFill,
+  onGenerativeFill,
 }: Props) {
   return (
     <div className="toolbar">
@@ -72,6 +76,14 @@ export function Toolbar({
           <button onClick={onClear} disabled={!canUndo}>
             🗑 Wyczyść
           </button>
+          {showGenerativeFill && (
+            <>
+              <div className="separator" />
+              <button className="gf-trigger" onClick={onGenerativeFill}>
+                ✨ Generative Fill
+              </button>
+            </>
+          )}
         </>
       )}
     </div>
