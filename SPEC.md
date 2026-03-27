@@ -15,7 +15,7 @@
 | Rendering      | HTML Canvas (image) + SVG (annotations) |
 | Styling        | Vanilla CSS (dark theme)     |
 | Image server   | Five Server (127.0.0.1:5500) |
-| AI Backend     | ComfyUI (127.0.0.1:8188) — inpainting |
+| AI Backend     | ComfyUI (127.0.0.1:8188) — FLUX.1 Fill Dev inpainting |
 
 ---
 
@@ -285,26 +285,37 @@ screenToImage(sx, sy) → { x: (sx - transform.x) / transform.scale,
 
 | Function         | Signature                                                                        | Description                                             |
 | ---------------- | -------------------------------------------------------------------------------- | ------------------------------------------------------- |
-| `getCheckpoints` | `() => Promise<string[]>`                                                        | Fetches list of available checkpoint models from ComfyUI |
+| `getCheckpoints` | `() => Promise<string[]>`                                                        | Fetches list of available UNET models from ComfyUI      |
 | `generateFill`   | `(crop: string, mask: string, prompt: string, checkpoint?: string) => Promise<string>` | Full inpainting flow: upload → workflow → queue → poll → returns data URL |
 
-**ComfyUI Workflow (inpainting):**
-```
-CheckpointLoaderSimple (selected model)
-  ├── MODEL → KSampler
-  ├── CLIP → CLIPTextEncode (positive prompt)
-  └── CLIP → CLIPTextEncode (negative: "blurry, bad quality, ...")
-  └── VAE → VAEEncodeForInpaint, VAEDecode
+**Default model config:**
+- UNET: `flux1-fill-dev.safetensors` (models/unet/)
+- CLIP: `clip_l.safetensors` + `t5xxl_fp16.safetensors` (models/clip/)
+- VAE: `ae.safetensors` (models/vae/)
 
-LoadImage (crop) → VAEEncodeForInpaint
-LoadImage (mask) → ImageToMask (red channel) → VAEEncodeForInpaint
+**ComfyUI Workflow (FLUX Fill Dev inpainting):**
+```
+UNETLoader (flux1-fill-dev.safetensors)
+  └── MODEL → KSampler
+
+DualCLIPLoader (clip_l + t5xxl_fp16, type=flux)
+  └── CLIP → CLIPTextEncode (positive prompt)
+  └── CLIP → CLIPTextEncode (negative: empty)
+
+VAELoader (ae.safetensors)
+  └── VAE → InpaintModelConditioning, VAEDecode
+
+LoadImage (crop)  ─┐
+LoadImage (mask)  → ImageToMask (red) ─┐
+                    InpaintModelConditioning
+                      └── positive, negative, latent → KSampler
 
 KSampler:
   - steps: 20
-  - cfg: 7
-  - sampler: euler_ancestral
-  - scheduler: normal
-  - denoise: 0.85
+  - cfg: 1.0
+  - sampler: euler
+  - scheduler: simple
+  - denoise: 1.0
 
 VAEDecode → SaveImage → result
 ```
@@ -312,9 +323,9 @@ VAEDecode → SaveImage → result
 **API calls:**
 - `POST /upload/image` — upload crop and mask as PNG
 - `POST /prompt` — queue workflow
-- `GET /history/{prompt_id}` — poll result (every 1s, timeout 120s)
+- `GET /history/{prompt_id}` — poll result (every 1s, timeout 5min)
 - `GET /view?filename=...&subfolder=...&type=output` — fetch generated image
-- `GET /object_info/CheckpointLoaderSimple` — list available checkpoints
+- `GET /object_info/UNETLoader` — list available UNET models
 
 ---
 
@@ -409,7 +420,10 @@ Dark theme — color palette:
 - No annotation export/import
 - Line thickness is not scaled proportionally to image size — it is visually constant
 - Generative fill requires a running ComfyUI instance on `localhost:8188`
-- ComfyUI must have at least one checkpoint model installed (e.g. Realistic Vision V5.1 Inpainting)
+- ComfyUI must have FLUX.1 Fill Dev models installed:
+  - `flux1-fill-dev.safetensors` in `models/unet/`
+  - `clip_l.safetensors` + `t5xxl_fp16.safetensors` in `models/clip/`
+  - `ae.safetensors` in `models/vae/`
 - After accepting generative fill, the original is overwritten in memory (data URL) — no undo to original
 
 ---
@@ -425,4 +439,6 @@ npm run dev        # → http://localhost:5173
 **Requirements:**
 - File server at `http://127.0.0.1:5500/assets/` with files `1.jpeg`–`4.jpeg`
 - ComfyUI at `http://127.0.0.1:8188` (required for generative fill)
-  - At least one checkpoint in `models/checkpoints/`
+  - FLUX Fill Dev: `flux1-fill-dev.safetensors` in `models/unet/`
+  - FLUX CLIP: `clip_l.safetensors` + `t5xxl_fp16.safetensors` in `models/clip/`
+  - FLUX VAE: `ae.safetensors` in `models/vae/`

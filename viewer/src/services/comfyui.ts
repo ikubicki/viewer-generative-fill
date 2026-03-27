@@ -2,14 +2,20 @@ const COMFY_BASE = "http://127.0.0.1:8188";
 const POLL_INTERVAL = 1000;
 const POLL_TIMEOUT = 300_000; // 5 min
 
-// ---- public: list available checkpoints ----
+// ---- FLUX Fill Dev model config ----
+const FLUX_FILL_UNET = "flux1-fill-dev.safetensors";
+const FLUX_CLIP_L = "clip_l.safetensors";
+const FLUX_T5XXL = "t5xxl_fp16.safetensors";
+const FLUX_VAE = "ae.safetensors";
+
+// ---- public: list available UNET models ----
 
 export async function getCheckpoints(): Promise<string[]> {
-  const res = await fetch(`${COMFY_BASE}/object_info/CheckpointLoaderSimple`);
+  const res = await fetch(`${COMFY_BASE}/object_info/UNETLoader`);
   if (!res.ok) throw new Error(`ComfyUI error ${res.status}`);
   const data = await res.json();
   const list: string[] =
-    data?.CheckpointLoaderSimple?.input?.required?.ckpt_name?.[0] ?? [];
+    data?.UNETLoader?.input?.required?.unet_name?.[0] ?? [];
   return list;
 }
 
@@ -105,103 +111,121 @@ function blobToDataUrl(blob: Blob): Promise<string> {
   });
 }
 
-// ---- inpainting workflow ----
+// ---- FLUX Fill Dev inpainting workflow ----
 
-function buildInpaintWorkflow(
+function buildFluxFillWorkflow(
   imageName: string,
   maskName: string,
   prompt: string,
-  negativePrompt = "low quality, blurry, distorted, artifacts",
+  unetName = FLUX_FILL_UNET,
   steps = 20,
-  cfg = 7.0,
-  denoise = 0.85,
-  checkpoint = "sd_xl_base_1.0.safetensors"
+  cfg = 1.0,
+  denoise = 1.0
 ): Record<string, unknown> {
   return {
-    // Node 1: Load Checkpoint
+    // Node 1: Load UNET (FLUX Fill Dev)
     "1": {
-      class_type: "CheckpointLoaderSimple",
+      class_type: "UNETLoader",
       inputs: {
-        ckpt_name: checkpoint,
+        unet_name: unetName,
+        weight_dtype: "default",
       },
     },
-    // Node 2: Load Image (source)
+    // Node 2: Load Dual CLIP (clip_l + t5xxl, type=flux)
     "2": {
+      class_type: "DualCLIPLoader",
+      inputs: {
+        clip_name1: FLUX_CLIP_L,
+        clip_name2: FLUX_T5XXL,
+        type: "flux",
+      },
+    },
+    // Node 3: Load VAE (FLUX ae)
+    "3": {
+      class_type: "VAELoader",
+      inputs: {
+        vae_name: FLUX_VAE,
+      },
+    },
+    // Node 4: Load source image
+    "4": {
       class_type: "LoadImage",
       inputs: {
         image: imageName,
       },
     },
-    // Node 3: Load Image (mask)
-    "3": {
+    // Node 5: Load mask image
+    "5": {
       class_type: "LoadImage",
       inputs: {
         image: maskName,
       },
     },
-    // Node 4: Convert mask image to mask
-    "4": {
+    // Node 6: Convert mask image to MASK type
+    "6": {
       class_type: "ImageToMask",
       inputs: {
-        image: ["3", 0],
+        image: ["5", 0],
         channel: "red",
       },
     },
-    // Node 5: VAE Encode for inpainting
-    "5": {
-      class_type: "VAEEncodeForInpaint",
-      inputs: {
-        pixels: ["2", 0],
-        vae: ["1", 2],
-        mask: ["4", 0],
-        grow_mask_by: 8,
-      },
-    },
-    // Node 6: Positive prompt
-    "6": {
-      class_type: "CLIPTextEncode",
-      inputs: {
-        text: prompt,
-        clip: ["1", 1],
-      },
-    },
-    // Node 7: Negative prompt
+    // Node 7: Positive prompt
     "7": {
       class_type: "CLIPTextEncode",
       inputs: {
-        text: negativePrompt,
-        clip: ["1", 1],
+        text: prompt,
+        clip: ["2", 0],
       },
     },
-    // Node 8: KSampler
+    // Node 8: Negative prompt (empty for FLUX)
     "8": {
+      class_type: "CLIPTextEncode",
+      inputs: {
+        text: "",
+        clip: ["2", 0],
+      },
+    },
+    // Node 9: InpaintModelConditioning (FLUX Fill native inpainting)
+    "9": {
+      class_type: "InpaintModelConditioning",
+      inputs: {
+        positive: ["7", 0],
+        negative: ["8", 0],
+        vae: ["3", 0],
+        pixels: ["4", 0],
+        mask: ["6", 0],
+        noise_mask: true,
+      },
+    },
+    // Node 10: KSampler
+    "10": {
       class_type: "KSampler",
       inputs: {
         model: ["1", 0],
-        positive: ["6", 0],
-        negative: ["7", 0],
-        latent_image: ["5", 0],
+        positive: ["9", 0],
+        negative: ["9", 1],
+        latent_image: ["9", 2],
         seed: Math.floor(Math.random() * 2 ** 32),
         steps,
         cfg,
-        sampler_name: "euler_ancestral",
-        scheduler: "normal",
+        sampler_name: "euler",
+        scheduler: "simple",
         denoise,
       },
     },
-    // Node 9: VAE Decode
-    "9": {
+    // Node 11: VAE Decode
+    "11": {
       class_type: "VAEDecode",
       inputs: {
-        samples: ["8", 0],
-        vae: ["1", 2],
+        samples: ["10", 0],
+        vae: ["3", 0],
       },
     },
-    // Node 10: Save Image
-    "10": {
+    // Node 12: Save Image
+    "12": {
       class_type: "SaveImage",
       inputs: {
-        images: ["9", 0],
+        images: ["11", 0],
         filename_prefix: "viewer_fill",
       },
     },
@@ -216,17 +240,8 @@ export async function generateFill(
   prompt: string,
   checkpoint?: string
 ): Promise<string> {
-  // 0. Resolve checkpoint
-  let ckpt = checkpoint;
-  if (!ckpt) {
-    const available = await getCheckpoints();
-    if (available.length === 0) {
-      throw new Error(
-        "Brak checkpointów w ComfyUI. Dodaj model do katalogu models/checkpoints/ i zrestartuj ComfyUI."
-      );
-    }
-    ckpt = available[0];
-  }
+  // Resolve UNET model name
+  const unet = checkpoint ?? FLUX_FILL_UNET;
 
   // 1. Upload images to ComfyUI
   const ts = Date.now();
@@ -235,8 +250,8 @@ export async function generateFill(
     uploadImage(maskBase64, `viewer_mask_${ts}.png`),
   ]);
 
-  // 2. Build and queue the inpainting workflow
-  const workflow = buildInpaintWorkflow(imageName, maskName, prompt, undefined, undefined, undefined, undefined, ckpt);
+  // 2. Build and queue the FLUX Fill inpainting workflow
+  const workflow = buildFluxFillWorkflow(imageName, maskName, prompt, unet);
   const promptId = await queuePrompt(workflow);
 
   // 3. Poll for result
