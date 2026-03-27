@@ -1,5 +1,6 @@
-import { useState } from "react";
+import { useState, useRef } from "react";
 import { ImageViewer } from "./components/ImageViewer";
+import type { ImageViewerHandle } from "./components/ImageViewer";
 import { Toolbar } from "./components/Toolbar";
 import { Thumbnails } from "./components/Thumbnails";
 import type { Polygon } from "./types";
@@ -13,11 +14,13 @@ const IMAGE_URLS = [
 ];
 
 export default function App() {
+  const viewerRef = useRef<ImageViewerHandle>(null);
   const [currentIndex, setCurrentIndex] = useState(0);
   const [markupMode, setMarkupMode] = useState(false);
   const [polygons, setPolygons] = useState<Record<number, Polygon[]>>({});
   const [strokeColor, setStrokeColor] = useState("#ff3366");
   const [strokeWidth, setStrokeWidth] = useState(3);
+  const [zoomPercent, setZoomPercent] = useState(100);
 
   const currentPolygons = polygons[currentIndex] ?? [];
 
@@ -56,15 +59,21 @@ export default function App() {
         onClear={clearPolygons}
         onUndo={undoPolygon}
         canUndo={currentPolygons.length > 0}
+        onZoomIn={() => viewerRef.current?.zoomBy(1.3)}
+        onZoomOut={() => viewerRef.current?.zoomBy(1 / 1.3)}
+        onFitToView={() => viewerRef.current?.fitToView()}
+        zoomPercent={zoomPercent}
       />
       <div className="viewer-area">
         <ImageViewer
+          ref={viewerRef}
           src={IMAGE_URLS[currentIndex]}
           markupMode={markupMode}
           polygons={currentPolygons}
           onAddPolygon={addPolygon}
           strokeColor={strokeColor}
           strokeWidth={strokeWidth}
+          onScaleChange={(s) => setZoomPercent(Math.round(s * 100))}
         />
       </div>
       <Thumbnails

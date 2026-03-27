@@ -1,4 +1,4 @@
-import { useRef, useEffect, useCallback, useState } from "react";
+import { useRef, useEffect, useCallback, useState, useImperativeHandle, forwardRef } from "react";
 import type { Transform, Polygon, Point } from "../types";
 import { SvgOverlay } from "./SvgOverlay";
 
@@ -9,16 +9,23 @@ interface Props {
   onAddPolygon: (p: Polygon) => void;
   strokeColor: string;
   strokeWidth: number;
+  onScaleChange?: (scale: number) => void;
 }
 
-export function ImageViewer({
+export interface ImageViewerHandle {
+  zoomBy: (factor: number) => void;
+  fitToView: () => void;
+}
+
+export const ImageViewer = forwardRef<ImageViewerHandle, Props>(function ImageViewer({
   src,
   markupMode,
   polygons,
   onAddPolygon,
   strokeColor,
   strokeWidth,
-}: Props) {
+  onScaleChange,
+}, ref) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const imgRef = useRef<HTMLImageElement | null>(null);
@@ -28,6 +35,8 @@ export function ImageViewer({
   const rafRef = useRef<number>(0);
   const [containerSize, setContainerSize] = useState({ w: 0, h: 0 });
   const [transform, setTransform] = useState<Transform>({ x: 0, y: 0, scale: 1 });
+  const onScaleChangeRef = useRef(onScaleChange);
+  useEffect(() => { onScaleChangeRef.current = onScaleChange; });
 
   // ---- draw canvas ----
   const draw = useCallback(() => {
@@ -65,6 +74,7 @@ export function ImageViewer({
     const y = (ch - ih * scale) / 2;
     transformRef.current = { x, y, scale };
     setTransform({ x, y, scale });
+    onScaleChangeRef.current?.(scale);
     scheduleDraw();
   }, [scheduleDraw]);
 
@@ -99,6 +109,7 @@ export function ImageViewer({
   // ---- sync transform state for SVG ----
   const commitTransform = useCallback(() => {
     setTransform({ ...transformRef.current });
+    onScaleChangeRef.current?.(transformRef.current.scale);
   }, []);
 
   // ---- wheel zoom ----
@@ -160,6 +171,33 @@ export function ImageViewer({
     isPanning.current = false;
   }, []);
 
+  // ---- programmatic zoom (from buttons) ----
+  const zoomBy = useCallback(
+    (factor: number) => {
+      const container = containerRef.current;
+      if (!container) return;
+      const cw = container.clientWidth;
+      const ch = container.clientHeight;
+      const cx = cw / 2;
+      const cy = ch / 2;
+
+      const t = transformRef.current;
+      const newScale = Math.min(Math.max(t.scale * factor, 0.05), 50);
+      const ratio = newScale / t.scale;
+
+      transformRef.current = {
+        x: cx - (cx - t.x) * ratio,
+        y: cy - (cy - t.y) * ratio,
+        scale: newScale,
+      };
+      commitTransform();
+      scheduleDraw();
+    },
+    [scheduleDraw, commitTransform]
+  );
+
+  useImperativeHandle(ref, () => ({ zoomBy, fitToView: fitImage }), [zoomBy, fitImage]);
+
   // ---- convert screen point to image coords ----
   const screenToImage = useCallback((sx: number, sy: number): Point => {
     const t = transformRef.current;
@@ -192,4 +230,4 @@ export function ImageViewer({
       />
     </div>
   );
-}
+});

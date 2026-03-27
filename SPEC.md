@@ -71,6 +71,10 @@ interface Transform {
 - `polygons: Record<number, Polygon[]>` — mapa poligonów per obrazek (klucz = indeks)
 - `strokeColor: string` — aktualny kolor rysowania (domyślnie `#ff3366`)
 - `strokeWidth: number` — aktualna grubość linii (domyślnie `3`)
+- `zoomPercent: number` — aktualny poziom zoomu w procentach (domyślnie `100`)
+
+**Referencje:**
+- `viewerRef: React.RefObject<ImageViewerHandle>` — ref do `ImageViewer`, używany do programowego zoom (`zoomBy`) i fit-to-view (`fitToView`)
 
 **Operacje na poligonach:**
 - `addPolygon(polygon)` — dodaje poligon do bieżącego obrazka
@@ -94,14 +98,25 @@ const IMAGE_URLS = [
 **Odpowiedzialność:** Renderowanie obrazka na canvas z obsługą zoom i pan.
 
 **Props:**
-| Prop           | Typ                       | Opis                              |
-| -------------- | ------------------------- | --------------------------------- |
-| `src`          | `string`                  | URL obrazka                       |
-| `markupMode`   | `boolean`                 | Czy tryb markup jest aktywny      |
-| `polygons`     | `Polygon[]`               | Poligony do wyświetlenia          |
-| `onAddPolygon` | `(p: Polygon) => void`    | Callback dodania poligonu         |
-| `strokeColor`  | `string`                  | Aktualny kolor rysowania          |
-| `strokeWidth`  | `number`                  | Aktualna grubość linii            |
+| Prop             | Typ                        | Opis                              |
+| ---------------- | -------------------------- | --------------------------------- |
+| `src`            | `string`                   | URL obrazka                       |
+| `markupMode`     | `boolean`                  | Czy tryb markup jest aktywny      |
+| `polygons`       | `Polygon[]`                | Poligony do wyświetlenia          |
+| `onAddPolygon`   | `(p: Polygon) => void`     | Callback dodania poligonu         |
+| `strokeColor`    | `string`                   | Aktualny kolor rysowania          |
+| `strokeWidth`    | `number`                   | Aktualna grubość linii            |
+| `onScaleChange`  | `(scale: number) => void`  | Callback wywoływany przy zmianie skali (opcjonalny) |
+
+**Imperative Handle (`ImageViewerHandle`):**
+| Metoda       | Sygnatura                 | Opis                                              |
+| ------------ | ------------------------- | ------------------------------------------------- |
+| `zoomBy`     | `(factor: number) => void`| Programowy zoom do centrum widoku (×factor)        |
+| `fitToView`  | `() => void`              | Dopasowanie obrazka do kontenera                   |
+
+Komponent jest `forwardRef` — `App` trzyma `viewerRef` i wywołuje metody handle z przycisków toolbara.
+
+`onScaleChange` jest przechowywany w `useRef` (aktualizowany w `useEffect`), aby uniknąć nieskończonej pętli re-renderów spowodowanej nową referencją inline arrow w zależnościach `useCallback`.
 
 **Mechanizmy:**
 
@@ -113,6 +128,8 @@ const IMAGE_URLS = [
 | **Pan**          | Przeciąganie LPM (mousedown → mousemove → mouseup)                                        |
 | **Resize**       | `ResizeObserver` na kontenerze → automatyczne dopasowanie canvas i ponowny fit              |
 | **Blokada w markup** | Gdy `markupMode=true`, zdarzenia wheel i pan są ignorowane — widok zablokowany         |
+| **Zoom programowy** | Metoda `zoomBy(factor)` — zoom do centrum widoku, wywoływana z przycisków toolbara     |
+| **Fit to view**  | Metoda `fitToView()` — resetuje widok do dopasowania obrazka w kontenerze                  |
 
 **Konwersja współrzędnych:**
 ```
@@ -162,9 +179,10 @@ screenToImage(sx, sy) → { x: (sx - transform.x) / transform.scale,
 </svg>
 ```
 
-**Pointer events:**
-- Tryb normalny: `pointer-events: none` — kliknięcia przechodzą do canvas (zoom/pan)
-- Tryb markup: `pointer-events: all` + `cursor: crosshair` — SVG przechwytuje mysz
+**Pointer events & izolacja zdarzeń:**
+- Tryb normalny: `pointer-events: none` na SVG + brak React event handlerów (`onMouseDown={undefined}`) — zdarzenia przechodzą do canvas (zoom/pan)
+- Tryb markup: `pointer-events: all` + `cursor: crosshair` + aktywne React event handlery — SVG przechwytuje mysz
+- Handlery w SvgOverlay używają `stopPropagation()` aby zapobiec propagacji do kontenera ImageViewer podczas rysowania
 
 ---
 
@@ -176,6 +194,10 @@ screenToImage(sx, sy) → { x: (sx - transform.x) / transform.scale,
 
 | Element              | Warunek wyświetlenia | Opis                                           |
 | -------------------- | -------------------- | ---------------------------------------------- |
+| Przycisk **－**      | Zawsze               | Zoom out (÷1.3 do centrum widoku)              |
+| Wyświetlacz zoomu    | Zawsze               | Aktualny zoom w procentach (np. `100%`), `tabular-nums` |
+| Przycisk **＋**      | Zawsze               | Zoom in (×1.3 do centrum widoku)               |
+| Przycisk **⊡**       | Zawsze               | Fit to view — dopasowanie obrazka do kontenera  |
 | Przycisk Markup      | Zawsze               | Toggle markup on/off, podświetlony gdy aktywny  |
 | Color picker         | `markupMode=true`    | Input type="color" do wyboru koloru obrysu      |
 | Range slider         | `markupMode=true`    | Grubość linii 1–20px                            |
@@ -204,6 +226,9 @@ screenToImage(sx, sy) → { x: (sx - transform.x) / transform.scale,
 ```
 Scroll kółkiem  →  Zoom do kursora (×1.1 / ÷1.1)
 LPM + drag      →  Pan (przesunięcie widoku)
+Przycisk ＋     →  Zoom in ×1.3 (do centrum widoku)
+Przycisk －     →  Zoom out ÷1.3 (do centrum widoku)
+Przycisk ⊡      →  Fit to view (reset widoku)
 Klik miniaturka  →  Zmiana obrazka (zachowuje poligony per obraz)
 ```
 

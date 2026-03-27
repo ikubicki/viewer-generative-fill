@@ -8,6 +8,10 @@ interface Props {
   onClear: () => void;
   onUndo: () => void;
   canUndo: boolean;
+  onZoomIn: () => void;
+  onZoomOut: () => void;
+  onFitToView: () => void;
+  zoomPercent: number;
 }
 
 export function Toolbar({
@@ -20,9 +24,18 @@ export function Toolbar({
   onClear,
   onUndo,
   canUndo,
+  onZoomIn,
+  onZoomOut,
+  onFitToView,
+  zoomPercent,
 }: Props) {
   return (
     <div className="toolbar">
+      <button onClick={onZoomOut} title="Zoom out">－</button>
+      <span className="zoom-level">{zoomPercent}%</span>
+      <button onClick={onZoomIn} title="Zoom in">＋</button>
+      <button onClick={onFitToView} title="Dopasuj do widoku">⊡</button>
+      <div className="separator" />
       <button
         className={markupMode ? "active" : ""}
         onClick={onToggleMarkup}

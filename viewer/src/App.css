@@ -71,6 +71,15 @@
   accent-color: #e94560;
 }
 
+.toolbar .zoom-level {
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  min-width: 48px;
+  text-align: center;
+  color: #e0e0e0;
+  user-select: none;
+}
+
 /* ---------- VIEWER AREA ---------- */
 .viewer-area {
   flex: 1;

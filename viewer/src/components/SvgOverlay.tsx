@@ -105,10 +105,10 @@ export function SvgOverlay({
       className={`svg-overlay${markupMode ? " drawing" : ""}`}
       width={containerWidth}
       height={containerHeight}
-      onMouseDown={onMouseDown}
-      onMouseMove={onMouseMove}
-      onMouseUp={onMouseUp}
-      onMouseLeave={onMouseUp}
+      onMouseDown={markupMode ? onMouseDown : undefined}
+      onMouseMove={markupMode ? onMouseMove : undefined}
+      onMouseUp={markupMode ? onMouseUp : undefined}
+      onMouseLeave={markupMode ? onMouseUp : undefined}
     >
       <g transform={`translate(${x}, ${y}) scale(${scale})`}>
         {polygons.map((poly, i) => (
