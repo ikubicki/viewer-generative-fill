@@ -1,6 +1,9 @@
 # macOS
 .DS_Store
 
+# Local assets (originals — app uses viewer/public/assets/)
+assets/
+
 # Editor
 .vscode/*
 !.vscode/extensions.json
