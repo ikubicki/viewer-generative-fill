@@ -1,6 +1,6 @@
 const COMFY_BASE = "http://127.0.0.1:8188";
 const POLL_INTERVAL = 1000;
-const POLL_TIMEOUT = 300_000; // 5 min
+const POLL_TIMEOUT = 600_000; // 10 min
 
 // ---- FLUX Fill Dev model config ----
 const FLUX_FILL_UNET = "flux1-fill-dev.safetensors";

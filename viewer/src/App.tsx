@@ -10,10 +10,10 @@ import { generateFill } from "./services/comfyui";
 import "./App.css";
 
 const DEFAULT_IMAGE_URLS = [
-  "http://127.0.0.1:5500/assets/1.jpeg",
-  "http://127.0.0.1:5500/assets/2.jpeg",
-  "http://127.0.0.1:5500/assets/3.jpeg",
-  "http://127.0.0.1:5500/assets/4.jpeg",
+  "/assets/1.jpeg",
+  "/assets/2.jpeg",
+  "/assets/3.jpeg",
+  "/assets/4.jpeg",
 ];
 
 export default function App() {
